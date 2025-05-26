@@ -66,6 +66,7 @@ void displayOLED(const char* msg){
         
         ssd1306_draw_string(&ssd, "Usuarios:", 18, 27); // Desenha uma string
         sprintf(str_usuarios, "%d", usuarios); // Converte int em string
+        ssd1306_draw_string(&ssd, "  ", 90, 27); // Apaga parte variável
         
         if(usuarios > 9){
             ssd1306_draw_string(&ssd, str_usuarios, 90, 27); // Desenha uma string
@@ -73,6 +74,7 @@ void displayOLED(const char* msg){
             ssd1306_draw_string(&ssd, str_usuarios, 94, 27); // Desenha uma string   
         }
         
+        ssd1306_draw_string(&ssd, "               ", 3, 45); // Apaga parte variável
         ssd1306_draw_string(&ssd, msg, 3, 45); // Desenha uma string 
         ssd1306_send_data(&ssd); // Atualiza o display
         
