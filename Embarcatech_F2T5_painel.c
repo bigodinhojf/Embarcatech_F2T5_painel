@@ -38,13 +38,8 @@ SemaphoreHandle_t xResetSem; // Declração para o semaforo de contagem do boto�
 // -- Variáveis globais
 static volatile uint32_t last_time = 0; // Armazena o tempo do último clique dos botões
 volatile uint16_t usuarios = 0; // Armazena a quantidade de usuários atual
-
-// Interrupção do botão do Joystick
-void gpio_callback(uint gpio, uint32_t events){
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    xSemaphoreGiveFromISR(xResetSem, &xHigherPriorityTaskWoken);
-    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-}
+char str_usuarios[2]; // String para o display OLED
+volatile int buzzer_play = 0; // Auxilia no beep do buzzer 
 
 void led_color(){
     if(usuarios == 0){
@@ -66,45 +61,117 @@ void led_color(){
     }
 }
 
-void displayOLED(){
-    if (xSemaphoreTake(xDisplayMutex, portMAX_DELAY)==pdTRUE) {
-            
-
-
+void displayOLED(const char* msg){
+    if(xSemaphoreTake(xDisplayMutex, portMAX_DELAY) == pdTRUE) {
+        
+        ssd1306_draw_string(&ssd, "Usuarios:", 18, 27); // Desenha uma string
+        sprintf(str_usuarios, "%d", usuarios); // Converte int em string
+        
+        if(usuarios > 9){
+            ssd1306_draw_string(&ssd, str_usuarios, 90, 27); // Desenha uma string
+        }else{
+            ssd1306_draw_string(&ssd, str_usuarios, 94, 27); // Desenha uma string   
+        }
+        
+        ssd1306_draw_string(&ssd, msg, 3, 45); // Desenha uma string 
+        ssd1306_send_data(&ssd); // Atualiza o display
+        
         xSemaphoreGive(xDisplayMutex);
     }
 }
 
 void vTaskEntrada(void *params){
     while(true){
-        if (xSemaphoreTake(xDisplayMutex, portMAX_DELAY)==pdTRUE) {
-            
-
-
-            xSemaphoreGive(xDisplayMutex);
+        if(gpio_get(button_A) == 0){
+            if(xSemaphoreTake(xUsuariosSem, 0) == pdTRUE){
+                usuarios++;
+                led_color();
+                displayOLED("Mais 1 usuario");
+            }else{
+                displayOLED(" Espaco cheio!");
+                buzzer_play = 1;
+            }
+            vTaskDelay(pdMS_TO_TICKS(200));
         }
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
 void vTaskSaida(void *params){
     while(true){
-        if (xSemaphoreTake(xDisplayMutex, portMAX_DELAY)==pdTRUE) {
-            
-
-
-            xSemaphoreGive(xDisplayMutex);
+        if(gpio_get(button_B) == 0 && usuarios > 0){
+            usuarios--;
+            xSemaphoreGive(xUsuariosSem);
+            led_color();
+            displayOLED("Menos 1 usuario");
+            vTaskDelay(pdMS_TO_TICKS(200));
         }
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
+}
+
+// Interrupção do botão do Joystick
+void gpio_callback(uint gpio, uint32_t events){
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    xSemaphoreGiveFromISR(xResetSem, &xHigherPriorityTaskWoken);
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
 void vTaskReset(void *params){
     while(true){
-        if (xSemaphoreTake(xDisplayMutex, portMAX_DELAY)==pdTRUE) {
-            
-
-
-            xSemaphoreGive(xDisplayMutex);
+        if(xSemaphoreTake(xResetSem, portMAX_DELAY) == pdTRUE) {
+            while(usuarios > 0){
+                xSemaphoreGive(xUsuariosSem);
+                usuarios--;
+            }
+            led_color();
+            displayOLED("  Reset feito");
+            buzzer_play = 2;
         }
+    }
+}
+
+void vBuzzerTask(){
+    gpio_set_function(buzzer_A, GPIO_FUNC_PWM); // Define a função da porta GPIO como PWM
+    gpio_set_function(buzzer_B, GPIO_FUNC_PWM); // Define a função da porta GPIO como PWM
+
+    uint freq = 1000; // Frequência do buzzer
+    uint clock_div = 4; // Divisor do clock
+    uint wrap = (125000000 / (clock_div * freq)) - 1; // Define o valor do wrap para frequência escolhida
+
+    uint slice_A = pwm_gpio_to_slice_num(buzzer_A); // Define o slice do buzzer A
+    uint slice_B = pwm_gpio_to_slice_num(buzzer_B); // Define o slice do buzzer B
+
+    pwm_set_clkdiv(slice_A, clock_div); // Define o divisor do clock para o buzzer A
+    pwm_set_clkdiv(slice_B, clock_div); // Define o divisor do clock para o buzzer B
+    pwm_set_wrap(slice_A, wrap); // Define o valor do wrap para o buzzer A
+    pwm_set_wrap(slice_B, wrap); // Define o valor do wrap para o buzzer B
+    pwm_set_chan_level(slice_A, pwm_gpio_to_channel(buzzer_A), wrap / 40); // Duty cycle para definir o Volume do buzzer A
+    pwm_set_chan_level(slice_B, pwm_gpio_to_channel(buzzer_B), wrap / 40); // Duty cycle para definir o volume do buzzer B
+
+    while(true){
+        if(buzzer_play == 1){
+            pwm_set_enabled(slice_A, true);
+            pwm_set_enabled(slice_B, true);
+            vTaskDelay(pdMS_TO_TICKS(200));
+            pwm_set_enabled(slice_A, false);
+            pwm_set_enabled(slice_B, false);
+            buzzer_play = 0;
+        }else if(buzzer_play == 2){
+            pwm_set_enabled(slice_A, true);
+            pwm_set_enabled(slice_B, true);
+            vTaskDelay(pdMS_TO_TICKS(200));
+            pwm_set_enabled(slice_A, false);
+            pwm_set_enabled(slice_B, false);
+            vTaskDelay(pdMS_TO_TICKS(200));
+            pwm_set_enabled(slice_A, true);
+            pwm_set_enabled(slice_B, true);
+            vTaskDelay(pdMS_TO_TICKS(200));
+            pwm_set_enabled(slice_A, false);
+            pwm_set_enabled(slice_B, false);
+            buzzer_play = 0;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
@@ -120,20 +187,34 @@ void gpio_irq_handler(uint gpio, uint32_t events){
     }
 }
 
-int main()
-{
+int main(){
+    // Inicialização do monitor serial
     stdio_init_all();
 
     // Inicialização dos GPIO
+    gpio_init(button_A); // Inicia a GPIO 5 do botão A
+    gpio_set_dir(button_A, GPIO_IN); // Define a direção da GPIO 5 do botão A como entrada
+    gpio_pull_up(button_A); // Habilita o resistor de pull up da GPIO 5 do botão A
+    
+    gpio_init(button_B); // Inicia a GPIO 6 do botão B
+    gpio_set_dir(button_B, GPIO_IN); // Define a direção da GPIO 6 do botão B como entrada
+    gpio_pull_up(button_B); // Habilita o resistor de pull up da GPIO 6 do botão B
+
+    gpio_init(joystick_PB); // Inicia a GPIO 22 do botão do Joystick
+    gpio_set_dir(joystick_PB, GPIO_IN); // Define a direção da GPIO 22 do botão do Joystick como entrada
+    gpio_pull_up(joystick_PB); // Habilita o resistor de pull up da GPIO 22 do botão do Joystick
+
     gpio_init(LED_Green); // Inicia a GPIO 11 do LED Verde
     gpio_set_dir(LED_Green, GPIO_OUT); // Define a direção da GPIO 11 do LED Verde como saída
     gpio_put(LED_Green, false); // Estado inicial do LED apagado
+
     gpio_init(LED_Blue); // Inicia a GPIO 12 do LED Azul
     gpio_set_dir(LED_Blue, GPIO_OUT); // Define a direção da GPIO 12 do LED Azul como saída
     gpio_put(LED_Blue, false); // Estado inicial do LED apagado
+
     gpio_init(LED_Red); // Inicia a GPIO 13 do LED Vermelho
     gpio_set_dir(LED_Red, GPIO_OUT); // Define a direção da GPIO 13 do LED Vermelho como saída
-    gpio_put(LED_Red, false); // Estado inicial do LED apagado
+    gpio_put(LED_Red, false); // Estado inicial do LED aceso
 
     // Inicialização do Display I2C
     i2c_init(display_i2c_port, 400 * 1000); // Inicializa o I2C usando 400kHz
@@ -166,6 +247,7 @@ int main()
     xTaskCreate(vTaskEntrada, "Botão A", configMINIMAL_STACK_SIZE + 128, NULL, 1, NULL);
     xTaskCreate(vTaskSaida, "Botão B", configMINIMAL_STACK_SIZE + 128, NULL, 1, NULL);
     xTaskCreate(vTaskReset, "Botão do joystick", configMINIMAL_STACK_SIZE + 128, NULL, 1, NULL);
+    xTaskCreate(vBuzzerTask, "Buzzer", configMINIMAL_STACK_SIZE + 128, NULL, 1, NULL);
 
     // Inicia o agendador
     vTaskStartScheduler();
